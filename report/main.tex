@@ -1,0 +1,113 @@
+\documentclass[UTF8,a4paper,11pt]{ctexart}
+\usepackage[margin=2.35cm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{array}
+
+\hypersetup{colorlinks=true, linkcolor=black, citecolor=blue, urlcolor=blue}
+\graphicspath{{../outputs/figures/}{figures/}}
+\captionsetup{font=small, labelfont=bf}
+\setlength{\parskip}{0.35em}
+\setlength{\parindent}{2em}
+
+\newcommand{\maybefig}[3]{%
+\IfFileExists{#1}{\includegraphics[width=#2]{#1}}{\fbox{\parbox[c][4.2cm][c]{#2}{\centering 图表待生成：#3}}}%
+}
+
+\title{轻量级 CNN-Transformer 混合网络在 CIFAR-100 图像分类任务中的探索与消融分析}
+\author{作者：\underline{~~~~~~~~~~~~}\\课程：机器学习与深度学习}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+卷积神经网络具有局部感受野和平移等变等归纳偏置，通常能在中小规模图像数据集上稳定训练；视觉 Transformer 依靠自注意力机制建模长程依赖，但在小数据和轻量参数预算下容易出现优化困难或过拟合。本文围绕 CIFAR-100 图像分类任务，实现小型 CNN、Tiny ViT 和 CNN-Transformer 混合网络，并通过 Transformer 层数、patch size 与通道宽度的消融实验分析局部特征提取和全局建模的配合方式。实验重点不追求大模型复现，而是比较不同轻量结构在准确率、参数量和训练曲线上的差异，为课程设计场景下的混合视觉网络提供可复现实现和分析。
+\end{abstract}
+
+\noindent\textbf{关键词：} CIFAR-100；卷积神经网络；视觉 Transformer；轻量模型；消融实验
+
+\section{引言}
+CNN 通过卷积核共享和局部连接高效提取边缘、纹理和局部形状等视觉特征，是小图像分类任务中的强基线。ViT 将图像切分为 token 并使用多头自注意力建模 token 间关系，具备更灵活的全局依赖建模能力，但其缺少 CNN 的局部归纳偏置，通常需要更多数据、正则化和训练技巧。MobileViT\cite{mehta2022mobilevit} 和 MoCoViT\cite{ma2022mocovit} 等工作表明，将卷积模块与 Transformer 模块结合，有机会在移动端或轻量设置中获得更好的精度--复杂度平衡。
+
+本文选择 CIFAR-100\cite{krizhevsky2009learning} 作为主任务。该数据集图像分辨率仅为 $32\times32$，但包含 100 个类别，比 CIFAR-10 更能体现模型表示能力差异。本文实现三类模型：小型 CNN baseline、Tiny ViT 对照模型、CNN+Transformer 混合模型，并围绕混合模型进行消融，以回答两个问题：第一，Transformer 模块是否能在 CNN 局部特征基础上带来收益；第二，Transformer 层数、patch size 和通道宽度如何影响性能与参数量。
+
+\section{方法}
+\subsection{CNN baseline}
+CNN baseline 由三个卷积阶段组成，每个阶段采用 Conv-BN-GELU 的堆叠结构，并通过池化逐步降低空间分辨率。最后使用全局平均池化、LayerNorm 和线性分类器输出 100 类概率。该模型参数量小、训练稳定，用于衡量纯局部归纳偏置的表现。
+
+\subsection{Tiny ViT}
+Tiny ViT 参考 ViT\cite{dosovitskiy2021image} 的基本思想，将 $32\times32$ 图像划分为固定大小 patch，经卷积式 patch embedding 映射为 token 序列，加入 class token 和位置编码后输入 Transformer Encoder。该模型作为纯 Transformer 对照，用于观察在 CIFAR-100 这种小分辨率数据集上，缺少卷积前端时模型的优化和泛化表现。
+
+\subsection{CNN-Transformer 混合模型}
+混合模型先用两段卷积 stem 提取局部特征，将图像下采样为较小特征图；随后在特征图上切分 patch，输入轻量 Transformer Encoder 进行全局关系建模；最后对 token 做平均池化并分类。当 Transformer 深度设为 0 时，模型退化为仅包含卷积 stem 的 CNN-only 消融版本。该设计保留了 CNN 对局部纹理的高效编码，同时让 Transformer 在更短 token 序列上建模全局语义关系。
+
+\section{实验设置}
+数据集使用 CIFAR-100，训练集 50,000 张、测试集 10,000 张。训练阶段采用随机裁剪、水平翻转、RandAugment 和标准化；测试阶段仅进行标准化。优化器使用 AdamW，学习率采用 cosine 衰减，损失函数为带 label smoothing 的交叉熵。主实验训练 CNN baseline、Tiny ViT 和 Hybrid；消融实验包括去掉 Transformer、改变 Transformer 层数、改变 patch size 以及扩大通道/embedding 维度。
+
+评价指标包括测试集 top-1 accuracy、可训练参数量、训练/测试曲线和单 epoch 耗时。所有实验固定随机种子，日志保存为 CSV，最佳模型依据测试准确率保存。
+
+\section{结果分析}
+\begin{figure}[H]
+\centering
+\maybefig{accuracy_comparison.pdf}{0.88\linewidth}{accuracy\_comparison}
+\caption{不同模型在 CIFAR-100 上的最佳测试准确率对比。}
+\label{fig:accuracy}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\maybefig{parameter_comparison.pdf}{0.88\linewidth}{parameter\_comparison}
+\caption{不同模型的可训练参数量对比。}
+\label{fig:params}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\maybefig{training_curves.pdf}{0.88\linewidth}{training\_curves}
+\caption{各模型测试准确率随训练轮次变化的曲线。}
+\label{fig:curves}
+\end{figure}
+
+若实验图已生成，表~\ref{tab:results} 会由绘图脚本自动导出的结果表填充；否则可在训练完成后重新编译报告。
+
+\begin{table}[H]
+\centering
+\caption{主要实验与消融实验结果汇总。}
+\label{tab:results}
+\begin{tabular}{lccc}
+\toprule
+实验 & 参数量/M & 最佳测试准确率/\% & 最佳轮次 \\
+\midrule
+\IfFileExists{../outputs/figures/results_table.tex}{\input{../outputs/figures/results_table.tex}}{CNN baseline & 待生成 & 待生成 & 待生成 \\
+Tiny ViT & 待生成 & 待生成 & 待生成 \\
+Hybrid & 待生成 & 待生成 & 待生成 \\}
+\bottomrule
+\end{tabular}
+\end{table}
+
+从预期机制上看，CNN baseline 通常收敛更平滑，因为卷积结构天然适配局部纹理；Tiny ViT 参数不一定最多，但在小数据集上更依赖正则化和训练轮数；Hybrid 通过卷积 stem 降低 token 数量，使 Transformer 在较低计算成本下补充全局建模能力。最终结论应结合图~\ref{fig:accuracy}、图~\ref{fig:params} 和表~\ref{tab:results} 中的实际数值给出。
+
+\section{消融实验}
+消融实验围绕三个因素展开。第一，去掉 Transformer 后，模型只能依赖卷积 stem 和全局平均池化；若准确率明显下降，说明自注意力对类别间全局结构有帮助。第二，改变 Transformer 层数可以观察全局建模深度的边际收益；层数过少可能表达不足，层数过多则可能增加过拟合和训练成本。第三，patch size 控制 token 数量与每个 token 的感受野：较小 patch 保留更细粒度空间关系，但注意力计算更重；较大 patch 更轻量，但可能损失局部细节。通道宽度消融用于分析模型容量与泛化之间的权衡。
+
+\begin{figure}[H]
+\centering
+\maybefig{accuracy_params_tradeoff.pdf}{0.74\linewidth}{accuracy\_params\_tradeoff}
+\caption{准确率与参数量的权衡关系。}
+\label{fig:tradeoff}
+\end{figure}
+
+\section{结论}
+本文完成了 CIFAR-100 上轻量 CNN、Tiny ViT 和 CNN-Transformer 混合模型的实现与对比。该课程设计的核心不是复现复杂大模型，而是在统一训练设置下分析局部卷积特征与全局自注意力建模的互补关系。若实验结果显示 Hybrid 在接近 CNN 参数量的情况下取得更高准确率，则说明卷积 stem 与轻量 Transformer 的组合适合 CIFAR-100 这类小图像多类别任务；若提升有限，则可从数据规模、token 数量和正则化角度解释 Transformer 在小数据集上的局限。后续可进一步尝试更强的数据增强、知识蒸馏或更接近 MobileViT 的局部--全局--局部融合模块。
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}
