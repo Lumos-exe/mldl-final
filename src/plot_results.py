@@ -12,6 +12,17 @@ try:
 except ModuleNotFoundError:  # The existing course container has matplotlib; seaborn is optional.
     sns = None
 
+EXPERIMENT_ORDER = [
+    "cnn_baseline",
+    "tiny_vit",
+    "hybrid_main",
+    "hybrid_no_attention",
+    "hybrid_depth1",
+    "hybrid_depth4",
+    "hybrid_patch2",
+    "hybrid_patch8",
+]
+
 
 def read_metrics(path: Path):
     with path.open("r", encoding="utf-8") as f:
@@ -72,18 +83,19 @@ def main():
     if args.experiments:
         wanted = set(args.experiments)
         run_dirs = [p for p in run_dirs if p.name in wanted]
-    run_dirs = sorted(run_dirs)
+    order = {name: idx for idx, name in enumerate(EXPERIMENT_ORDER)}
+    run_dirs = sorted(run_dirs, key=lambda p: (order.get(p.name, len(order)), p.name))
     if not run_dirs:
         raise SystemExit(f"No completed runs found in {args.runs_dir}")
 
     summaries = [read_summary(p) for p in run_dirs]
     labels = [s["experiment"] for s in summaries]
-    accs = [s["best_test_acc"] * 100 for s in summaries]
+    accs = [s.get("test_acc", s["best_test_acc"]) * 100 for s in summaries]
     params = [s["parameters"] / 1e6 for s in summaries]
 
     fig, ax = plt.subplots(figsize=(7.2, 4.2))
     bars = ax.bar(labels, accs, color=palette[: len(labels)])
-    ax.set_ylabel("Best test accuracy (%)")
+    ax.set_ylabel("Final test accuracy (%)")
     ax.set_xlabel("")
     ax.set_ylim(0, max(accs) * 1.18 if accs else 100)
     ax.tick_params(axis="x", rotation=25)
@@ -119,17 +131,18 @@ def main():
     for i, run_dir in enumerate(run_dirs):
         rows = read_metrics(run_dir / "metrics.csv")
         epochs = [r["epoch"] for r in rows]
-        test_acc = [r["test_acc"] * 100 for r in rows]
-        ax.plot(epochs, test_acc, label=run_dir.name, linewidth=2, color=palette[i % len(palette)])
+        acc_key = "val_acc" if rows and "val_acc" in rows[0] else "test_acc"
+        curve_acc = [r[acc_key] * 100 for r in rows]
+        ax.plot(epochs, curve_acc, label=run_dir.name, linewidth=2, color=palette[i % len(palette)])
     ax.set_xlabel("Epoch")
-    ax.set_ylabel("Test accuracy (%)")
+    ax.set_ylabel("Validation accuracy (%)")
     ax.legend(frameon=True, fontsize=8)
     savefig(fig, args.out_dir / "training_curves")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     with (args.out_dir / "results_table.tex").open("w", encoding="utf-8") as f:
         for s in summaries:
-            f.write(f"{s['experiment']} & {s['parameters'] / 1e6:.2f} & {s['best_test_acc'] * 100:.2f} & {s['best_epoch']} \\\\\n")
+            f.write(f"{s['experiment']} & {s['parameters'] / 1e6:.2f} & {s.get('test_acc', s['best_test_acc']) * 100:.2f} & {s['best_epoch']} \\\\\n")
     print(f"Saved figures to {args.out_dir}")
 
 

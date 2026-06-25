@@ -17,6 +17,7 @@
     "epochs": 120,
     "batch_size": 128,
     "num_workers": 4,
+    "val_size": 5000,
     "lr": 0.0007,
     "min_lr": 0.000001,
     "weight_decay": 0.04,

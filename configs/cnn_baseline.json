@@ -4,16 +4,17 @@
   "model": {
     "name": "small_cnn",
     "num_classes": 100,
-    "width": 48,
+    "width": 47,
     "dropout": 0.10
   },
   "training": {
     "epochs": 120,
     "batch_size": 128,
     "num_workers": 4,
-    "lr": 0.0008,
+    "val_size": 5000,
+    "lr": 0.0007,
     "min_lr": 0.000001,
-    "weight_decay": 0.03,
+    "weight_decay": 0.04,
     "label_smoothing": 0.10,
     "augment": true,
     "randaugment": true
