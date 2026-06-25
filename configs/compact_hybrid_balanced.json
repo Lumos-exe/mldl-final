@@ -1,15 +1,15 @@
 {
-  "experiment": "hybrid_main",
+  "experiment": "compact_hybrid_balanced",
   "seed": 42,
   "model": {
     "name": "resnet_hybrid",
     "num_classes": 100,
-    "base_width": 54,
-    "embed_dim": 216,
+    "base_width": 27,
+    "embed_dim": 132,
     "patch_size": 2,
     "depth": 2,
-    "num_heads": 4,
-    "mlp_ratio": 4.0,
+    "num_heads": 3,
+    "mlp_ratio": 2.5,
     "dropout": 0.10,
     "feature_size": 8
   },

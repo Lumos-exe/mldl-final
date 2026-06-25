@@ -235,6 +235,87 @@ def make_encoder(
     return nn.TransformerEncoder(layer, num_layers=depth)
 
 
+class ConvFeedForward(nn.Module):
+    def __init__(self, embed_dim: int, hidden_dim: int, grid_size: int, dropout: float):
+        super().__init__()
+        self.grid_size = grid_size
+        self.fc1 = nn.Linear(embed_dim, hidden_dim)
+        self.dwconv = nn.Conv2d(
+            hidden_dim,
+            hidden_dim,
+            kernel_size=3,
+            padding=1,
+            groups=hidden_dim,
+        )
+        self.act = nn.GELU()
+        self.drop = nn.Dropout(dropout)
+        self.fc2 = nn.Linear(hidden_dim, embed_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.drop(self.act(self.fc1(x)))
+        bsz, num_tokens, hidden_dim = x.shape
+        expected_tokens = self.grid_size * self.grid_size
+        if num_tokens != expected_tokens:
+            raise ValueError(
+                f"ConvFeedForward expected {expected_tokens} tokens, got {num_tokens}"
+            )
+        x = x.transpose(1, 2).reshape(bsz, hidden_dim, self.grid_size, self.grid_size)
+        x = self.dwconv(x)
+        x = x.flatten(2).transpose(1, 2)
+        x = self.drop(self.act(x))
+        return self.drop(self.fc2(x))
+
+
+class ConvFFNTransformerBlock(nn.Module):
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        mlp_ratio: float,
+        dropout: float,
+        grid_size: int,
+    ):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.attn = nn.MultiheadAttention(
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.drop1 = nn.Dropout(dropout)
+        self.norm2 = nn.LayerNorm(embed_dim)
+        self.ffn = ConvFeedForward(
+            embed_dim=embed_dim,
+            hidden_dim=int(embed_dim * mlp_ratio),
+            grid_size=grid_size,
+            dropout=dropout,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        attn_in = self.norm1(x)
+        attn_out, _ = self.attn(attn_in, attn_in, attn_in, need_weights=False)
+        x = x + self.drop1(attn_out)
+        x = x + self.ffn(self.norm2(x))
+        return x
+
+
+def make_convffn_encoder(
+    embed_dim: int,
+    depth: int,
+    num_heads: int,
+    mlp_ratio: float,
+    dropout: float,
+    grid_size: int,
+) -> nn.Sequential:
+    return nn.Sequential(
+        *[
+            ConvFFNTransformerBlock(embed_dim, num_heads, mlp_ratio, dropout, grid_size)
+            for _ in range(depth)
+        ]
+    )
+
+
 class NoAttentionBlock(nn.Module):
     def __init__(self, embed_dim: int, mlp_ratio: float, dropout: float):
         super().__init__()
@@ -380,7 +461,7 @@ class MobileViTBlock(nn.Module):
     def __init__(
         self,
         in_channels: int,
-        embed_dim: int = 208,
+        embed_dim: int = 108,
         feature_size: int = 8,
         patch_size: int = 2,
         depth: int = 4,
@@ -388,16 +469,23 @@ class MobileViTBlock(nn.Module):
         mlp_ratio: float = 4.0,
         dropout: float = 0.1,
         mixer: str = "attention",
+        ffn_type: str = "mlp",
     ):
         super().__init__()
         if feature_size % patch_size != 0:
             raise ValueError(f"feature_size={feature_size} must be divisible by patch_size={patch_size}")
         if mixer not in {"attention", "no_attention"}:
             raise ValueError(f"Unknown mixer: {mixer}")
+        if ffn_type not in {"mlp", "conv"}:
+            raise ValueError(f"Unknown ffn_type: {ffn_type}")
+        if mixer == "no_attention" and ffn_type != "mlp":
+            raise ValueError("ffn_type='conv' is only supported with mixer='attention'")
 
         self.feature_size = feature_size
         self.patch_size = patch_size
         self.embed_dim = embed_dim
+        self.num_patches = (feature_size // patch_size) * (feature_size // patch_size)
+        self.ffn_type = ffn_type
 
         self.local_rep = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1, bias=False),
@@ -407,15 +495,22 @@ class MobileViTBlock(nn.Module):
             nn.BatchNorm2d(embed_dim),
             nn.ReLU(inplace=True),
         )
-        self.patch_embed = PatchEmbed(feature_size, patch_size, embed_dim, embed_dim)
-        self.pos_embed = nn.Parameter(torch.zeros(1, self.patch_embed.num_patches, embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, embed_dim))
         self.drop = nn.Dropout(dropout)
-        if mixer == "attention":
+        if mixer == "attention" and ffn_type == "mlp":
             self.encoder = make_encoder(embed_dim, depth, num_heads, mlp_ratio, dropout)
+        elif mixer == "attention":
+            self.encoder = make_convffn_encoder(
+                embed_dim,
+                depth,
+                num_heads,
+                mlp_ratio,
+                dropout,
+                grid_size=feature_size // patch_size,
+            )
         else:
             self.encoder = make_no_attention_encoder(embed_dim, depth, mlp_ratio, dropout)
         self.norm = nn.LayerNorm(embed_dim)
-        self.token_to_patch = nn.Linear(embed_dim, embed_dim * patch_size * patch_size)
         self.global_to_local = nn.Sequential(
             nn.Conv2d(embed_dim, in_channels, kernel_size=1, bias=False),
             nn.BatchNorm2d(in_channels),
@@ -427,30 +522,31 @@ class MobileViTBlock(nn.Module):
             nn.ReLU(inplace=True),
         )
         nn.init.trunc_normal_(self.pos_embed, std=0.02)
-        nn.init.trunc_normal_(self.token_to_patch.weight, std=0.02)
-        nn.init.zeros_(self.token_to_patch.bias)
 
-    def _tokens_to_feature_map(self, tokens: torch.Tensor) -> torch.Tensor:
-        bsz = tokens.size(0)
-        grid = self.feature_size // self.patch_size
-        patches = self.token_to_patch(tokens)
-        patches = patches.view(
-            bsz,
-            grid,
-            grid,
-            self.embed_dim,
-            self.patch_size,
-            self.patch_size,
-        )
-        patches = patches.permute(0, 3, 1, 4, 2, 5).contiguous()
-        return patches.view(bsz, self.embed_dim, self.feature_size, self.feature_size)
+    def _unfold(self, x: torch.Tensor) -> Tuple[torch.Tensor, int, int, int]:
+        bsz, channels, height, width = x.shape
+        patch = self.patch_size
+        if height % patch != 0 or width % patch != 0:
+            raise ValueError(f"Feature map {(height, width)} must be divisible by patch_size={patch}")
+        grid_h, grid_w = height // patch, width // patch
+        x = x.reshape(bsz, channels, grid_h, patch, grid_w, patch)
+        x = x.permute(0, 3, 5, 2, 4, 1).contiguous()
+        return x.view(bsz * patch * patch, grid_h * grid_w, channels), bsz, height, width
+
+    def _fold(self, tokens: torch.Tensor, bsz: int, height: int, width: int) -> torch.Tensor:
+        patch = self.patch_size
+        grid_h, grid_w = height // patch, width // patch
+        tokens = tokens.view(bsz, patch, patch, grid_h, grid_w, self.embed_dim)
+        tokens = tokens.permute(0, 5, 3, 1, 4, 2).contiguous()
+        return tokens.view(bsz, self.embed_dim, height, width)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         local_feat = self.local_rep(x)
-        tokens = self.patch_embed(local_feat) + self.pos_embed
+        tokens, bsz, height, width = self._unfold(local_feat)
+        tokens = tokens + self.pos_embed
         tokens = self.drop(tokens)
         tokens = self.encoder(tokens)
-        global_feat = self._tokens_to_feature_map(self.norm(tokens))
+        global_feat = self._fold(self.norm(tokens), bsz, height, width)
         global_feat = self.global_to_local(global_feat)
         return self.fusion(torch.cat([x, global_feat], dim=1))
 
@@ -459,15 +555,16 @@ class ResNetHybridTransformer(nn.Module):
     def __init__(
         self,
         num_classes: int = 100,
-        base_width: int = 52,
-        embed_dim: int = 208,
+        base_width: int = 27,
+        embed_dim: int = 108,
         patch_size: int = 2,
-        depth: int = 4,
-        num_heads: int = 4,
+        depth: int = 2,
+        num_heads: int = 3,
         mlp_ratio: float = 4.0,
         dropout: float = 0.1,
         feature_size: int = 8,
         mixer: str = "attention",
+        ffn_type: str = "mlp",
     ):
         super().__init__()
 
@@ -484,7 +581,19 @@ class ResNetHybridTransformer(nn.Module):
         self.layer3 = self._make_layer(mid_channels, blocks=2, stride=2)
         self.layer4 = self._make_layer(out_channels, blocks=2, stride=2)
 
-        self.hybrid_block = MobileViTBlock(
+        self.hybrid_block2 = MobileViTBlock(
+            in_channels=base_width * 2,
+            embed_dim=base_width * 2,
+            feature_size=16,
+            patch_size=patch_size,
+            depth=depth,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            dropout=dropout,
+            mixer=mixer,
+            ffn_type=ffn_type,
+        )
+        self.hybrid_block3 = MobileViTBlock(
             in_channels=mid_channels,
             embed_dim=embed_dim,
             feature_size=feature_size,
@@ -494,6 +603,7 @@ class ResNetHybridTransformer(nn.Module):
             mlp_ratio=mlp_ratio,
             dropout=dropout,
             mixer=mixer,
+            ffn_type=ffn_type,
         )
         self.avgpool = nn.AdaptiveAvgPool2d(1)
         self.dropout = nn.Dropout(dropout)
@@ -512,8 +622,9 @@ class ResNetHybridTransformer(nn.Module):
         x = self.stem(x)
         x = self.layer1(x)
         x = self.layer2(x)
+        x = self.hybrid_block2(x)
         x = self.layer3(x)
-        x = self.hybrid_block(x)
+        x = self.hybrid_block3(x)
         x = self.layer4(x)
         cnn_feat = self.avgpool(x).flatten(1)
         return self.head(self.dropout(cnn_feat))
@@ -621,6 +732,8 @@ def apply_cli_overrides(config: Dict[str, Any], args):
             model_cfg[cfg_name] = value
     if args.mixer is not None:
         model_cfg["mixer"] = args.mixer
+    if args.ffn_type is not None:
+        model_cfg["ffn_type"] = args.ffn_type
 
     if args.lr is not None:
         train_cfg["lr"] = args.lr
@@ -643,6 +756,7 @@ def main():
     parser.add_argument("--depth", type=int, default=None, help="Override Transformer depth.")
     parser.add_argument("--patch-size", type=int, default=None, help="Override patch size.")
     parser.add_argument("--mixer", choices=["attention", "no_attention"], default=None, help="Override hybrid token mixer.")
+    parser.add_argument("--ffn-type", choices=["mlp", "conv"], default=None, help="Override hybrid Transformer FFN type.")
     parser.add_argument("--lr", type=float, default=None, help="Override learning rate.")
     args = parser.parse_args()
 

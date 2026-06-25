@@ -19,13 +19,13 @@ def main():
         assert y.shape == (4, 100), f"{cfg_path}: got {tuple(y.shape)}"
         print(f"{cfg_path.name:30s} output={tuple(y.shape)} params={count_parameters(model):,}")
 
-    hybrid_cfg = json.loads(Path("configs/hybrid_main.json").read_text(encoding="utf-8"))
+    hybrid_cfg = json.loads(Path("configs/compact_hybrid.json").read_text(encoding="utf-8"))
     ablations = {
-        "hybrid_no_attention": {"mixer": "no_attention"},
-        "hybrid_depth2": {"depth": 2},
-        "hybrid_depth6": {"depth": 6},
-        "hybrid_patch1": {"patch_size": 1},
-        "hybrid_patch4": {"patch_size": 4},
+        "compact_no_attention": {"mixer": "no_attention"},
+        "compact_depth1": {"depth": 1},
+        "compact_depth3": {"depth": 3},
+        "compact_patch1": {"patch_size": 1},
+        "compact_patch4": {"patch_size": 4},
     }
     for name, overrides in ablations.items():
         cfg = copy.deepcopy(hybrid_cfg)

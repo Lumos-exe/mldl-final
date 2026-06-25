@@ -11,11 +11,11 @@ if [[ -z "${PYTHON:-}" ]]; then
     exit 1
   fi
 fi
-BASE=configs/hybrid_main.json
+BASE=configs/compact_hybrid.json
 COMMON=(--config "$BASE" --device cuda)
 
-"$PYTHON" src/train.py "${COMMON[@]}" --experiment hybrid_no_attention --mixer no_attention "$@"
-"$PYTHON" src/train.py "${COMMON[@]}" --experiment hybrid_depth2 --depth 2 "$@"
-"$PYTHON" src/train.py "${COMMON[@]}" --experiment hybrid_depth6 --depth 6 "$@"
-"$PYTHON" src/train.py "${COMMON[@]}" --experiment hybrid_patch1 --patch-size 1 "$@"
-"$PYTHON" src/train.py "${COMMON[@]}" --experiment hybrid_patch4 --patch-size 4 "$@"
+"$PYTHON" src/train.py "${COMMON[@]}" --experiment compact_no_attention --mixer no_attention "$@"
+"$PYTHON" src/train.py "${COMMON[@]}" --experiment compact_depth1 --depth 1 "$@"
+"$PYTHON" src/train.py "${COMMON[@]}" --experiment compact_depth3 --depth 3 "$@"
+"$PYTHON" src/train.py "${COMMON[@]}" --experiment compact_patch1 --patch-size 1 "$@"
+"$PYTHON" src/train.py "${COMMON[@]}" --experiment compact_patch4 --patch-size 4 "$@"

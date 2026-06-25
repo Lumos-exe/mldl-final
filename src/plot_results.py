@@ -13,14 +13,16 @@ except ModuleNotFoundError:  # The existing course container has matplotlib; sea
     sns = None
 
 EXPERIMENT_ORDER = [
+    "compact_cnn",
+    "compact_hybrid",
     "cnn_baseline",
-    "tiny_vit",
     "hybrid_main",
-    "hybrid_no_attention",
-    "hybrid_depth2",
-    "hybrid_depth6",
-    "hybrid_patch1",
-    "hybrid_patch4",
+    "tiny_vit",
+    "compact_no_attention",
+    "compact_depth1",
+    "compact_depth3",
+    "compact_patch1",
+    "compact_patch4",
 ]
 
 

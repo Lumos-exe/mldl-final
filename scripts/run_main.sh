@@ -12,6 +12,8 @@ if [[ -z "${PYTHON:-}" ]]; then
   fi
 fi
 
+"$PYTHON" src/train.py --config configs/compact_cnn.json --device cuda "$@"
+"$PYTHON" src/train.py --config configs/compact_hybrid.json --device cuda "$@"
 "$PYTHON" src/train.py --config configs/cnn_baseline.json --device cuda "$@"
 "$PYTHON" src/train.py --config configs/tiny_vit.json --device cuda "$@"
 "$PYTHON" src/train.py --config configs/hybrid_main.json --device cuda "$@"
