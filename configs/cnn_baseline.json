@@ -2,19 +2,19 @@
   "experiment": "cnn_baseline",
   "seed": 42,
   "model": {
-    "name": "small_cnn",
+    "name": "resnet18_cifar",
     "num_classes": 100,
-    "width": 47,
+    "base_width": 64,
     "dropout": 0.10
   },
   "training": {
-    "epochs": 120,
+    "epochs": 160,
     "batch_size": 128,
     "num_workers": 4,
     "val_size": 5000,
-    "lr": 0.0007,
+    "lr": 0.001,
     "min_lr": 0.000001,
-    "weight_decay": 0.04,
+    "weight_decay": 0.05,
     "label_smoothing": 0.10,
     "augment": true,
     "randaugment": true

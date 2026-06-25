@@ -145,6 +145,67 @@ class SmallCNN(nn.Module):
         return self.classifier(self.features(x))
 
 
+class BasicBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, in_ch: int, out_ch: int, stride: int = 1):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_ch)
+        self.act = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(out_ch, out_ch, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_ch)
+        if stride != 1 or in_ch != out_ch:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_ch, out_ch, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_ch),
+            )
+        else:
+            self.shortcut = nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = self.shortcut(x)
+        out = self.act(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        return self.act(out + identity)
+
+
+class CIFARResNet18(nn.Module):
+    def __init__(self, num_classes: int = 100, base_width: int = 64, dropout: float = 0.0):
+        super().__init__()
+        self.in_ch = base_width
+        self.stem = nn.Sequential(
+            nn.Conv2d(3, base_width, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(base_width),
+            nn.ReLU(inplace=True),
+        )
+        self.layer1 = self._make_layer(base_width, blocks=2, stride=1)
+        self.layer2 = self._make_layer(base_width * 2, blocks=2, stride=2)
+        self.layer3 = self._make_layer(base_width * 4, blocks=2, stride=2)
+        self.layer4 = self._make_layer(base_width * 8, blocks=2, stride=2)
+        self.head = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Dropout(dropout),
+            nn.Linear(base_width * 8, num_classes),
+        )
+
+    def _make_layer(self, out_ch: int, blocks: int, stride: int) -> nn.Sequential:
+        layers = [BasicBlock(self.in_ch, out_ch, stride=stride)]
+        self.in_ch = out_ch
+        for _ in range(1, blocks):
+            layers.append(BasicBlock(self.in_ch, out_ch, stride=1))
+        return nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.stem(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        return self.head(x)
+
+
 class PatchEmbed(nn.Module):
     def __init__(self, image_size: int, patch_size: int, in_chans: int, embed_dim: int):
         super().__init__()
@@ -315,6 +376,149 @@ class HybridCNNTransformer(nn.Module):
         return self.head(x)
 
 
+class MobileViTBlock(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        embed_dim: int = 208,
+        feature_size: int = 8,
+        patch_size: int = 2,
+        depth: int = 4,
+        num_heads: int = 4,
+        mlp_ratio: float = 4.0,
+        dropout: float = 0.1,
+        mixer: str = "attention",
+    ):
+        super().__init__()
+        if feature_size % patch_size != 0:
+            raise ValueError(f"feature_size={feature_size} must be divisible by patch_size={patch_size}")
+        if mixer not in {"attention", "no_attention"}:
+            raise ValueError(f"Unknown mixer: {mixer}")
+
+        self.feature_size = feature_size
+        self.patch_size = patch_size
+        self.embed_dim = embed_dim
+
+        self.local_rep = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels, embed_dim, kernel_size=1, bias=False),
+            nn.BatchNorm2d(embed_dim),
+            nn.ReLU(inplace=True),
+        )
+        self.patch_embed = PatchEmbed(feature_size, patch_size, embed_dim, embed_dim)
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.patch_embed.num_patches, embed_dim))
+        self.drop = nn.Dropout(dropout)
+        if mixer == "attention":
+            self.encoder = make_encoder(embed_dim, depth, num_heads, mlp_ratio, dropout)
+        else:
+            self.encoder = make_no_attention_encoder(embed_dim, depth, mlp_ratio, dropout)
+        self.norm = nn.LayerNorm(embed_dim)
+        self.token_to_patch = nn.Linear(embed_dim, embed_dim * patch_size * patch_size)
+        self.global_to_local = nn.Sequential(
+            nn.Conv2d(embed_dim, in_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True),
+        )
+        self.fusion = nn.Sequential(
+            nn.Conv2d(in_channels * 2, in_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True),
+        )
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+        nn.init.trunc_normal_(self.token_to_patch.weight, std=0.02)
+        nn.init.zeros_(self.token_to_patch.bias)
+
+    def _tokens_to_feature_map(self, tokens: torch.Tensor) -> torch.Tensor:
+        bsz = tokens.size(0)
+        grid = self.feature_size // self.patch_size
+        patches = self.token_to_patch(tokens)
+        patches = patches.view(
+            bsz,
+            grid,
+            grid,
+            self.embed_dim,
+            self.patch_size,
+            self.patch_size,
+        )
+        patches = patches.permute(0, 3, 1, 4, 2, 5).contiguous()
+        return patches.view(bsz, self.embed_dim, self.feature_size, self.feature_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        local_feat = self.local_rep(x)
+        tokens = self.patch_embed(local_feat) + self.pos_embed
+        tokens = self.drop(tokens)
+        tokens = self.encoder(tokens)
+        global_feat = self._tokens_to_feature_map(self.norm(tokens))
+        global_feat = self.global_to_local(global_feat)
+        return self.fusion(torch.cat([x, global_feat], dim=1))
+
+
+class ResNetHybridTransformer(nn.Module):
+    def __init__(
+        self,
+        num_classes: int = 100,
+        base_width: int = 52,
+        embed_dim: int = 208,
+        patch_size: int = 2,
+        depth: int = 4,
+        num_heads: int = 4,
+        mlp_ratio: float = 4.0,
+        dropout: float = 0.1,
+        feature_size: int = 8,
+        mixer: str = "attention",
+    ):
+        super().__init__()
+
+        mid_channels = base_width * 4
+        out_channels = base_width * 8
+        self.in_ch = base_width
+        self.stem = nn.Sequential(
+            nn.Conv2d(3, base_width, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(base_width),
+            nn.ReLU(inplace=True),
+        )
+        self.layer1 = self._make_layer(base_width, blocks=2, stride=1)
+        self.layer2 = self._make_layer(base_width * 2, blocks=2, stride=2)
+        self.layer3 = self._make_layer(mid_channels, blocks=2, stride=2)
+        self.layer4 = self._make_layer(out_channels, blocks=2, stride=2)
+
+        self.hybrid_block = MobileViTBlock(
+            in_channels=mid_channels,
+            embed_dim=embed_dim,
+            feature_size=feature_size,
+            patch_size=patch_size,
+            depth=depth,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            dropout=dropout,
+            mixer=mixer,
+        )
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.dropout = nn.Dropout(dropout)
+        self.head = nn.Linear(out_channels, num_classes)
+        nn.init.trunc_normal_(self.head.weight, std=0.02)
+        nn.init.zeros_(self.head.bias)
+
+    def _make_layer(self, out_ch: int, blocks: int, stride: int) -> nn.Sequential:
+        layers = [BasicBlock(self.in_ch, out_ch, stride=stride)]
+        self.in_ch = out_ch
+        for _ in range(1, blocks):
+            layers.append(BasicBlock(self.in_ch, out_ch, stride=1))
+        return nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.stem(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.hybrid_block(x)
+        x = self.layer4(x)
+        cnn_feat = self.avgpool(x).flatten(1)
+        return self.head(self.dropout(cnn_feat))
+
+
 def count_parameters(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
@@ -324,10 +528,14 @@ def build_model(config: Dict[str, Any]) -> nn.Module:
     name = model_cfg.pop("name")
     if name == "small_cnn":
         return SmallCNN(**model_cfg)
+    if name == "resnet18_cifar":
+        return CIFARResNet18(**model_cfg)
     if name == "tiny_vit":
         return TinyViT(**model_cfg)
     if name == "hybrid":
         return HybridCNNTransformer(**model_cfg)
+    if name == "resnet_hybrid":
+        return ResNetHybridTransformer(**model_cfg)
     raise ValueError(f"Unknown model name: {name}")
 
 
@@ -420,7 +628,7 @@ def apply_cli_overrides(config: Dict[str, Any], args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train lightweight CNN/Transformer models on CIFAR-100.")
+    parser = argparse.ArgumentParser(description="Train ResNet/Transformer models on CIFAR-100.")
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--device", default="cuda")

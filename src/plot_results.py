@@ -17,10 +17,10 @@ EXPERIMENT_ORDER = [
     "tiny_vit",
     "hybrid_main",
     "hybrid_no_attention",
-    "hybrid_depth1",
-    "hybrid_depth4",
-    "hybrid_patch2",
-    "hybrid_patch8",
+    "hybrid_depth2",
+    "hybrid_depth6",
+    "hybrid_patch1",
+    "hybrid_patch4",
 ]
 
 

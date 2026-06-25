@@ -22,10 +22,10 @@ def main():
     hybrid_cfg = json.loads(Path("configs/hybrid_main.json").read_text(encoding="utf-8"))
     ablations = {
         "hybrid_no_attention": {"mixer": "no_attention"},
-        "hybrid_depth1": {"depth": 1},
-        "hybrid_depth4": {"depth": 4},
-        "hybrid_patch2": {"patch_size": 2},
-        "hybrid_patch8": {"patch_size": 8},
+        "hybrid_depth2": {"depth": 2},
+        "hybrid_depth6": {"depth": 6},
+        "hybrid_patch1": {"patch_size": 1},
+        "hybrid_patch4": {"patch_size": 4},
     }
     for name, overrides in ablations.items():
         cfg = copy.deepcopy(hybrid_cfg)

@@ -15,7 +15,7 @@ BASE=configs/hybrid_main.json
 COMMON=(--config "$BASE" --device cuda)
 
 "$PYTHON" src/train.py "${COMMON[@]}" --experiment hybrid_no_attention --mixer no_attention "$@"
-"$PYTHON" src/train.py "${COMMON[@]}" --experiment hybrid_depth1 --depth 1 "$@"
-"$PYTHON" src/train.py "${COMMON[@]}" --experiment hybrid_depth4 --depth 4 "$@"
-"$PYTHON" src/train.py "${COMMON[@]}" --experiment hybrid_patch2 --patch-size 2 "$@"
-"$PYTHON" src/train.py "${COMMON[@]}" --experiment hybrid_patch8 --patch-size 8 "$@"
+"$PYTHON" src/train.py "${COMMON[@]}" --experiment hybrid_depth2 --depth 2 "$@"
+"$PYTHON" src/train.py "${COMMON[@]}" --experiment hybrid_depth6 --depth 6 "$@"
+"$PYTHON" src/train.py "${COMMON[@]}" --experiment hybrid_patch1 --patch-size 1 "$@"
+"$PYTHON" src/train.py "${COMMON[@]}" --experiment hybrid_patch4 --patch-size 4 "$@"
