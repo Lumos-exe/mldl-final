@@ -13,8 +13,20 @@ except ModuleNotFoundError:  # The existing course container has matplotlib; sea
     sns = None
 
 EXPERIMENT_ORDER = [
+    "mobile_cnn",
+    "mobile_cnn_matched",
+    "mobilevit_cifar",
+    "mobilevit_cifar_v2",
+    "mobilevit_v2_no_attention",
+    "mobilevit_v2_depth1",
+    "mobilevit_v2_patch4",
+    "mobilevit_no_attention",
+    "mobilevit_depth1",
+    "mobilevit_patch4",
     "compact_cnn",
     "compact_hybrid",
+    "compact_hybrid_balanced",
+    "compact_hybrid_convffn",
     "cnn_baseline",
     "hybrid_main",
     "tiny_vit",

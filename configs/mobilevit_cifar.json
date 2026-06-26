@@ -1,0 +1,31 @@
+{
+  "experiment": "mobilevit_cifar",
+  "seed": 42,
+  "model": {
+    "name": "mobilevit_cifar",
+    "num_classes": 100,
+    "stem_width": 32,
+    "channels": [32, 48, 96, 144],
+    "stage_repeats": [1, 1, 1, 1],
+    "expansion": 4.0,
+    "embed_dims": [96, 144, 192],
+    "depths": [2, 2, 3],
+    "num_heads": [3, 4, 4],
+    "mlp_ratio": 2.0,
+    "patch_size": 2,
+    "dropout": 0.10,
+    "head_dim": 576
+  },
+  "training": {
+    "epochs": 160,
+    "batch_size": 128,
+    "num_workers": 4,
+    "val_size": 5000,
+    "lr": 0.001,
+    "min_lr": 0.000001,
+    "weight_decay": 0.05,
+    "label_smoothing": 0.10,
+    "augment": true,
+    "randaugment": true
+  }
+}

@@ -6,7 +6,7 @@ import json
 import random
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -143,6 +143,94 @@ class SmallCNN(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.classifier(self.features(x))
+
+
+class ConvBNAct(nn.Module):
+    def __init__(
+        self,
+        in_ch: int,
+        out_ch: int,
+        kernel_size: int = 3,
+        stride: int = 1,
+        groups: int = 1,
+    ):
+        super().__init__()
+        padding = (kernel_size - 1) // 2
+        self.block = nn.Sequential(
+            nn.Conv2d(
+                in_ch,
+                out_ch,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                groups=groups,
+                bias=False,
+            ),
+            nn.BatchNorm2d(out_ch),
+            nn.SiLU(inplace=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.block(x)
+
+
+class InvertedResidual(nn.Module):
+    def __init__(self, in_ch: int, out_ch: int, stride: int = 1, expansion: float = 4.0):
+        super().__init__()
+        if stride not in {1, 2}:
+            raise ValueError(f"stride must be 1 or 2, got {stride}")
+        hidden_ch = int(round(in_ch * expansion))
+        layers = []
+        if hidden_ch != in_ch:
+            layers.append(ConvBNAct(in_ch, hidden_ch, kernel_size=1))
+        layers.extend(
+            [
+                ConvBNAct(hidden_ch, hidden_ch, kernel_size=3, stride=stride, groups=hidden_ch),
+                nn.Conv2d(hidden_ch, out_ch, kernel_size=1, bias=False),
+                nn.BatchNorm2d(out_ch),
+            ]
+        )
+        self.block = nn.Sequential(*layers)
+        self.use_residual = stride == 1 and in_ch == out_ch
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = self.block(x)
+        if self.use_residual:
+            out = out + x
+        return out
+
+
+def make_mv2_stage(
+    in_ch: int,
+    out_ch: int,
+    repeats: int,
+    stride: int,
+    expansion: float,
+) -> nn.Sequential:
+    if repeats < 1:
+        raise ValueError(f"repeats must be positive, got {repeats}")
+    layers = [InvertedResidual(in_ch, out_ch, stride=stride, expansion=expansion)]
+    for _ in range(1, repeats):
+        layers.append(InvertedResidual(out_ch, out_ch, stride=1, expansion=expansion))
+    return nn.Sequential(*layers)
+
+
+def make_optional_mv2_stage(
+    channels: int,
+    repeats: int,
+    expansion: float,
+) -> nn.Module:
+    if repeats < 0:
+        raise ValueError(f"repeats must be non-negative, got {repeats}")
+    if repeats == 0:
+        return nn.Identity()
+    return make_mv2_stage(
+        channels,
+        channels,
+        repeats=repeats,
+        stride=1,
+        expansion=expansion,
+    )
 
 
 class BasicBlock(nn.Module):
@@ -630,6 +718,211 @@ class ResNetHybridTransformer(nn.Module):
         return self.head(self.dropout(cnn_feat))
 
 
+def _as_list(value: int | Sequence[int], length: int, name: str) -> list[int]:
+    if isinstance(value, int):
+        return [value] * length
+    values = list(value)
+    if len(values) != length:
+        raise ValueError(f"{name} must have length {length}, got {len(values)}")
+    return [int(v) for v in values]
+
+
+class MobileCIFARBackbone(nn.Module):
+    def __init__(
+        self,
+        num_classes: int = 100,
+        mode: str = "cnn",
+        stem_width: int = 32,
+        channels: Sequence[int] = (32, 48, 96, 144),
+        stage_repeats: Sequence[int] = (1, 1, 1, 1),
+        expansion: float = 4.0,
+        local_repeats: Sequence[int] = (0, 0, 0),
+        cnn_repeats: Sequence[int] = (3, 3, 4),
+        cnn_expansion: float = 6.0,
+        embed_dims: Sequence[int] = (96, 144, 192),
+        depths: Sequence[int] = (2, 2, 3),
+        depth: Optional[int] = None,
+        num_heads: Sequence[int] = (3, 4, 4),
+        mlp_ratio: float = 2.0,
+        patch_size: int = 2,
+        dropout: float = 0.1,
+        head_dim: int = 576,
+        mixer: str = "attention",
+        ffn_type: str = "mlp",
+    ):
+        super().__init__()
+        if mode not in {"cnn", "hybrid"}:
+            raise ValueError(f"Unknown mobile mode: {mode}")
+        channels = _as_list(channels, 4, "channels")
+        stage_repeats = _as_list(stage_repeats, 4, "stage_repeats")
+        local_repeats = _as_list(local_repeats, 3, "local_repeats")
+        cnn_repeats = _as_list(cnn_repeats, 3, "cnn_repeats")
+        embed_dims = _as_list(embed_dims, 3, "embed_dims")
+        depths = _as_list(depth if depth is not None else depths, 3, "depths")
+        num_heads = _as_list(num_heads, 3, "num_heads")
+
+        self.mode = mode
+        self.stem = ConvBNAct(3, stem_width, kernel_size=3, stride=1)
+        self.stage1 = make_mv2_stage(
+            stem_width,
+            channels[0],
+            repeats=stage_repeats[0],
+            stride=1,
+            expansion=expansion,
+        )
+        self.down16 = make_mv2_stage(
+            channels[0],
+            channels[1],
+            repeats=stage_repeats[1],
+            stride=2,
+            expansion=expansion,
+        )
+        self.local16 = make_optional_mv2_stage(
+            channels[1],
+            repeats=local_repeats[0],
+            expansion=cnn_expansion,
+        )
+        self.block16 = self._make_middle_block(
+            mode,
+            channels[1],
+            feature_size=16,
+            cnn_repeats=cnn_repeats[0],
+            cnn_expansion=cnn_expansion,
+            embed_dim=embed_dims[0],
+            depth=depths[0],
+            num_heads=num_heads[0],
+            mlp_ratio=mlp_ratio,
+            patch_size=patch_size,
+            dropout=dropout,
+            mixer=mixer,
+            ffn_type=ffn_type,
+        )
+        self.down8 = make_mv2_stage(
+            channels[1],
+            channels[2],
+            repeats=stage_repeats[2],
+            stride=2,
+            expansion=expansion,
+        )
+        self.local8 = make_optional_mv2_stage(
+            channels[2],
+            repeats=local_repeats[1],
+            expansion=cnn_expansion,
+        )
+        self.block8 = self._make_middle_block(
+            mode,
+            channels[2],
+            feature_size=8,
+            cnn_repeats=cnn_repeats[1],
+            cnn_expansion=cnn_expansion,
+            embed_dim=embed_dims[1],
+            depth=depths[1],
+            num_heads=num_heads[1],
+            mlp_ratio=mlp_ratio,
+            patch_size=patch_size,
+            dropout=dropout,
+            mixer=mixer,
+            ffn_type=ffn_type,
+        )
+        self.down4 = make_mv2_stage(
+            channels[2],
+            channels[3],
+            repeats=stage_repeats[3],
+            stride=2,
+            expansion=expansion,
+        )
+        self.local4 = make_optional_mv2_stage(
+            channels[3],
+            repeats=local_repeats[2],
+            expansion=cnn_expansion,
+        )
+        self.block4 = self._make_middle_block(
+            mode,
+            channels[3],
+            feature_size=4,
+            cnn_repeats=cnn_repeats[2],
+            cnn_expansion=cnn_expansion,
+            embed_dim=embed_dims[2],
+            depth=depths[2],
+            num_heads=num_heads[2],
+            mlp_ratio=mlp_ratio,
+            patch_size=patch_size,
+            dropout=dropout,
+            mixer=mixer,
+            ffn_type=ffn_type,
+        )
+        self.head = nn.Sequential(
+            ConvBNAct(channels[3], head_dim, kernel_size=1),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Dropout(dropout),
+            nn.Linear(head_dim, num_classes),
+        )
+
+    @staticmethod
+    def _make_middle_block(
+        mode: str,
+        channels: int,
+        feature_size: int,
+        cnn_repeats: int,
+        cnn_expansion: float,
+        embed_dim: int,
+        depth: int,
+        num_heads: int,
+        mlp_ratio: float,
+        patch_size: int,
+        dropout: float,
+        mixer: str,
+        ffn_type: str,
+    ) -> nn.Module:
+        if mode == "cnn":
+            return make_mv2_stage(
+                channels,
+                channels,
+                repeats=cnn_repeats,
+                stride=1,
+                expansion=cnn_expansion,
+            )
+        return MobileViTBlock(
+            in_channels=channels,
+            embed_dim=embed_dim,
+            feature_size=feature_size,
+            patch_size=patch_size,
+            depth=depth,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            dropout=dropout,
+            mixer=mixer,
+            ffn_type=ffn_type,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.stem(x)
+        x = self.stage1(x)
+        x = self.down16(x)
+        x = self.local16(x)
+        x = self.block16(x)
+        x = self.down8(x)
+        x = self.local8(x)
+        x = self.block8(x)
+        x = self.down4(x)
+        x = self.local4(x)
+        x = self.block4(x)
+        return self.head(x)
+
+
+class MobileCNNCIFAR(MobileCIFARBackbone):
+    def __init__(self, **kwargs):
+        kwargs.pop("mode", None)
+        super().__init__(mode="cnn", **kwargs)
+
+
+class MobileViTCIFAR(MobileCIFARBackbone):
+    def __init__(self, **kwargs):
+        kwargs.pop("mode", None)
+        super().__init__(mode="hybrid", **kwargs)
+
+
 def count_parameters(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
@@ -647,6 +940,10 @@ def build_model(config: Dict[str, Any]) -> nn.Module:
         return HybridCNNTransformer(**model_cfg)
     if name == "resnet_hybrid":
         return ResNetHybridTransformer(**model_cfg)
+    if name == "mobile_cnn":
+        return MobileCNNCIFAR(**model_cfg)
+    if name == "mobilevit_cifar":
+        return MobileViTCIFAR(**model_cfg)
     raise ValueError(f"Unknown model name: {name}")
 
 
