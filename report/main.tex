@@ -7,6 +7,7 @@
 \usepackage{titlesec}
 \usepackage{float}
 \usepackage{url}
+\usepackage[colorlinks=true, linkcolor=black, citecolor=black, urlcolor=blue]{hyperref}
 
 \graphicspath{{../outputs/figures/}{figures/}}
 \pagestyle{plain}
@@ -32,18 +33,27 @@
 \twocolumn[
 \begin{@twocolumnfalse}
 \begin{center}
-{\bfseries\zihao{4} 轻量 CNN-Transformer 混合网络在 CIFAR-100 图像分类任务中的探索与消融分析\par}
+{\bfseries\zihao{4} 面向 CIFAR-100 的轻量 CNN-Transformer 混合网络设计与消融分析\par}
 \vspace{0.8em}
-{\zihao{-4}\itshape 姓名，学号\par}
+{\zihao{-4}\itshape 姓名，学号（隐私不透露）\par}
 \vspace{1.0em}
 \end{center}
 \end{@twocolumnfalse}
 ]
 
+\begin{center}
+\begin{minipage}{0.92\columnwidth}
 \section*{摘要}
 本文围绕 CIFAR-100 图像分类任务，研究轻量卷积神经网络与视觉 Transformer 融合是否能在小参数预算下带来稳定收益。方法上，本文实现了适配 CIFAR 分辨率的轻量 ResNet baseline，并在较窄 ResNet 主干中插入 MobileViT-style 局部--全局--局部融合块，构成 CNN-Transformer Hybrid。实验分为主实验和消融实验：主实验比较纯 CNN、主 Hybrid 与容量重分配 Hybrid；消融实验进一步分析 self-attention、Transformer depth 和 patch size 的影响。结果显示，主 Hybrid 在参数量略少于 CNN baseline 的条件下将测试准确率从 71.82\% 提升到 72.69\%，容量重分配版本达到 72.88\%；no-attention 消融降至 70.98\%，说明 token-token 全局交互对性能有实际贡献。整体结论是：在 CIFAR-100 小图像任务中，CNN 的局部归纳偏置仍然强有效，而合理插入轻量 Transformer 模块可以获得稳定但幅度有限的提升。
 
 \noindent\textbf{关键词---} CIFAR-100；ResNet；视觉 Transformer；MobileViT；混合网络；消融实验
+
+\vspace{0.3em}
+\noindent\textbf{代码地址：}
+\href{https://github.com/Lumos-exe/mldl-final}{GitHub: Lumos-exe/mldl-final}
+\end{minipage}
+\end{center}
+\vspace{0.8em}
 
 \section{引言}
 CIFAR-100 图像大小为 $32\times32$，类别数为 100，每类样本数量有限。对这类小分辨率数据而言，卷积神经网络的局部感受野、权值共享和平移等变性具有明显优势；但纯卷积结构主要依靠堆叠局部算子扩大感受野，对远距离区域关系的显式建模能力有限。视觉 Transformer 通过 self-attention 在 token 序列上建模全局依赖，为图像分类提供了另一类表示学习方式，但在小数据集和小图像上直接使用 ViT 往往依赖更强的数据规模、正则化和训练技巧。
@@ -92,7 +102,7 @@ no-attention 消融是本文中最重要的内部对照。该实验保留 qkv/pr
 本文的调参原则是先固定训练协议，再比较结构变量。这样做牺牲了一部分针对单个模型的最优调参空间，但能减少实验结论受到训练策略差异的干扰。主实验中，\model{compact\_hybrid\_balanced} 调整了 Transformer embed dim 和 MLP ratio，使参数量更接近 CNN baseline；消融实验中，除被研究因素外，其余设置尽量继承 \model{compact\_hybrid}。因此表中同时报告参数量、最佳验证准确率、测试准确率和最佳轮次，用于判断结果是否来自模型结构、参数规模或训练波动。
 
 \subsection{主实验}
-主实验用于回答：在相近参数预算下，CNN-Transformer 混合结构是否比纯 CNN 更有优势。本文比较 \model{compact\_cnn}、\model{compact\_hybrid} 和 \model{compact\_hybrid\_balanced}，结果见表~\ref{tab:main} 和图~\ref{fig:main-acc}。
+主实验用于回答：在相近参数预算下，CNN-Transformer 混合结构是否比纯 CNN 更有优势。本文比较 \model{compact\_cnn}、\model{compact\_hybrid} 和 \model{compact\_hybrid\_balanced}，其中表中的 Hybrid-B 指 \model{compact\_hybrid\_balanced}，即参数量更接近 CNN baseline 的容量重分配版 Hybrid。结果见表~\ref{tab:main} 和图~\ref{fig:main-acc}。
 
 \begin{table}[t]
 \centering
@@ -175,15 +185,16 @@ depth 消融显示，depth1 与主 Hybrid 的测试准确率几乎相同，而 d
 \subsection{批判性分析}
 从结果看，Hybrid 相比 CNN 的收益存在明确边界。首先，主 Hybrid 的测试提升为 0.87 个百分点，属于轻量模型上的稳定小幅收益；其次，depth3 虽然表现更好，但参数量也明显增加；再次，所有正式结果基于固定随机种子，尚未报告多 seed 均值和方差，因此结论限定在当前实验协议下。CIFAR-100 图像分辨率很低，CNN 的局部归纳偏置本身非常匹配任务，Transformer 模块的优势主要体现在补充全局关系。
 
-本文还有两个局限。第一，实验没有系统搜索学习率、weight decay、dropout、RandAugment 强度等超参数。统一训练协议提高了比较公平性，但不保证每个模型都达到最优。第二，本文只在 CIFAR-100 上验证，输入分辨率较低，结论不一定能直接推广到 ImageNet 或更高分辨率场景。若数据规模和分辨率增大，Transformer 的全局建模能力可能更有价值；反之，在更小数据或更低计算预算下，纯 CNN 可能仍然更划算。因此，本文结论适用于当前轻量 CIFAR-100 实验设定。
+本文还有两个局限。第一，实验没有系统搜索学习率、weight decay、dropout、RandAugment 强度等超参数。统一训练协议提高了比较公平性，但不保证每个模型都达到最优。第二，本文只在 CIFAR-100 上验证，输入分辨率较低，结论不一定能直接推广到 ImageNet 或更高分辨率场景。因此，本文结论适用于当前轻量 CIFAR-100 实验设定。
 
-从实验设计角度看，本文的价值主要在于完整实现、参数对齐和消融分析。主实验回答“混合结构是否有收益”，no-attention 回答“收益是否来自 self-attention 交互”，depth 和 patch size 回答“结构超参数如何影响结果”。这些实验共同形成了较完整的证据链，比单独报告一个最高准确率更可靠。
+主实验、no-attention、depth 与 patch size 消融共同构成了从总体收益到结构来源的证据链。
 
 \section{结论}
 本文在 CIFAR-100 上实现并比较了轻量 CNN 与 MobileViT-style ResNet-Transformer Hybrid。实验结果支持一个谨慎结论：在约 2.8M 参数预算下，Hybrid 在参数量略少的情况下相比 CNN baseline 获得稳定小幅提升；no-attention 消融进一步表明 self-attention 的全局交互是性能来源之一。与此同时，提升幅度并不大，说明 CIFAR-100 小图像任务中 CNN 的局部归纳偏置仍然非常有效，Hybrid 的收益依赖融合位置、容量分配和 patch 粒度。
 
 综合主实验和消融实验，CNN-Transformer 混合结构在轻量图像分类中的作用主要是补充卷积主干的全局关系建模能力。卷积负责稳定提取局部纹理和空间结构，Transformer 则在中后层特征上提供跨区域关系建模。未来工作可以进一步补充多随机种子实验、报告置信区间，并在更大分辨率或更复杂数据集上检验该混合结构的泛化性。同时，也可以继续探索更细致的容量分配方式，例如不同 stage 插入位置、不同 attention head 数量、轻量化 FFN 设计以及蒸馏训练等，以判断 Hybrid 的收益是否能够在相同计算预算下进一步放大。
 
+\clearpage
 \section{参考文献}
 \noindent [1] S. Mehta and M. Rastegari, ``MobileViT: Light-weight, General-purpose, and Mobile-friendly Vision Transformer,'' International Conference on Learning Representations, 2022.
 
