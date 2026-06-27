@@ -1,0 +1,16 @@
+{
+  "experiment": "compact_no_attention",
+  "config": "configs/compact_hybrid.json",
+  "model": "resnet_hybrid",
+  "parameters": 2796031,
+  "best_epoch": 140,
+  "best_val_acc": 0.7234,
+  "test_loss": 1.7851617988586426,
+  "test_acc": 0.7098,
+  "best_test_acc": 0.7098,
+  "epochs": 160,
+  "total_seconds": 1835.1276149749756,
+  "seed": 42,
+  "val_size": 5000,
+  "device": "cuda"
+}

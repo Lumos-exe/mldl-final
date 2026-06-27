@@ -4,12 +4,8 @@ __pycache__/
 data/
 ~$*
 
-outputs/runs/*
-outputs/figures/*
 outputs/debug_runs/
 outputs/debug_figures/
-!outputs/runs/.gitkeep
-!outputs/figures/.gitkeep
 
 report/*.aux
 report/*.bbl

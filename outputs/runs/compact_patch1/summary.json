@@ -1,0 +1,16 @@
+{
+  "experiment": "compact_patch1",
+  "config": "configs/compact_hybrid.json",
+  "model": "resnet_hybrid",
+  "parameters": 2811583,
+  "best_epoch": 157,
+  "best_val_acc": 0.7346,
+  "test_loss": 1.7220555610656738,
+  "test_acc": 0.7277,
+  "best_test_acc": 0.7277,
+  "epochs": 160,
+  "total_seconds": 2060.3283038139343,
+  "seed": 42,
+  "val_size": 5000,
+  "device": "cuda"
+}

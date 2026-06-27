@@ -1,0 +1,16 @@
+{
+  "experiment": "compact_cnn",
+  "config": "configs/compact_cnn.json",
+  "model": "resnet18_cifar",
+  "parameters": 2820740,
+  "best_epoch": 160,
+  "best_val_acc": 0.715,
+  "test_loss": 1.762332004737854,
+  "test_acc": 0.7182,
+  "best_test_acc": 0.7182,
+  "epochs": 160,
+  "total_seconds": 957.6791260242462,
+  "seed": 42,
+  "val_size": 5000,
+  "device": "cuda"
+}

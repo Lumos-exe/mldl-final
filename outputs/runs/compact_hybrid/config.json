@@ -1,17 +1,17 @@
 {
-  "experiment": "tiny_vit",
+  "experiment": "compact_hybrid",
   "seed": 42,
   "model": {
-    "name": "tiny_vit",
+    "name": "resnet_hybrid",
     "num_classes": 100,
-    "image_size": 32,
-    "patch_size": 4,
-    "embed_dim": 320,
-    "depth": 8,
-    "num_heads": 5,
+    "base_width": 27,
+    "embed_dim": 108,
+    "patch_size": 2,
+    "depth": 2,
+    "num_heads": 3,
     "mlp_ratio": 4.0,
-    "dropout": 0.10,
-    "pool": "cls"
+    "dropout": 0.1,
+    "feature_size": 8
   },
   "training": {
     "epochs": 160,
@@ -19,9 +19,9 @@
     "num_workers": 4,
     "val_size": 5000,
     "lr": 0.001,
-    "min_lr": 0.000001,
+    "min_lr": 1e-06,
     "weight_decay": 0.05,
-    "label_smoothing": 0.10,
+    "label_smoothing": 0.1,
     "augment": true,
     "randaugment": true
   }

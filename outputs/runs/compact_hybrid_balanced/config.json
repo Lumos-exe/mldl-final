@@ -1,0 +1,28 @@
+{
+  "experiment": "compact_hybrid_balanced",
+  "seed": 42,
+  "model": {
+    "name": "resnet_hybrid",
+    "num_classes": 100,
+    "base_width": 27,
+    "embed_dim": 132,
+    "patch_size": 2,
+    "depth": 2,
+    "num_heads": 3,
+    "mlp_ratio": 2.5,
+    "dropout": 0.1,
+    "feature_size": 8
+  },
+  "training": {
+    "epochs": 160,
+    "batch_size": 128,
+    "num_workers": 4,
+    "val_size": 5000,
+    "lr": 0.001,
+    "min_lr": 1e-06,
+    "weight_decay": 0.05,
+    "label_smoothing": 0.1,
+    "augment": true,
+    "randaugment": true
+  }
+}

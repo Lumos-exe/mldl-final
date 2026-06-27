@@ -1,115 +1,196 @@
-\documentclass[UTF8,a4paper,11pt]{ctexart}
-\usepackage[margin=2.35cm]{geometry}
+\documentclass[UTF8,letterpaper,twocolumn]{ctexart}
+\usepackage[top=2.49cm,bottom=2.49cm,left=1.90cm,right=1.90cm,columnsep=0.61cm]{geometry}
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{amsmath}
-\usepackage{hyperref}
 \usepackage{caption}
-\usepackage{subcaption}
-\usepackage{xcolor}
+\usepackage{titlesec}
 \usepackage{float}
-\usepackage{array}
+\usepackage{url}
 
-\hypersetup{colorlinks=true, linkcolor=black, citecolor=blue, urlcolor=blue}
 \graphicspath{{../outputs/figures/}{figures/}}
-\captionsetup{font=small, labelfont=bf}
-\setlength{\parskip}{0.35em}
+\pagestyle{plain}
 \setlength{\parindent}{2em}
+\setlength{\parskip}{0pt}
+\setlength{\textfloatsep}{7pt plus 1pt minus 1pt}
+\setlength{\floatsep}{6pt plus 1pt minus 1pt}
+\setlength{\intextsep}{6pt plus 1pt minus 1pt}
+\captionsetup{font=footnotesize, labelfont=bf, skip=3pt}
 
+\titleformat{\section}{\centering\bfseries\normalsize}{\thesection.}{0.5em}{}
+\titlespacing*{\section}{0pt}{0.70em}{0.45em}
+\titleformat{\subsection}{\bfseries\normalsize}{\thesubsection}{0.5em}{}
+\titlespacing*{\subsection}{0pt}{0.55em}{0.25em}
+
+\newcommand{\model}[1]{\texttt{#1}}
 \newcommand{\maybefig}[3]{%
-\IfFileExists{#1}{\includegraphics[width=#2]{#1}}{\fbox{\parbox[c][4.2cm][c]{#2}{\centering 图表待生成：#3}}}%
+\IfFileExists{../outputs/figures/#1}{\includegraphics[width=#2]{../outputs/figures/#1}}{\fbox{\parbox[c][3.2cm][c]{#2}{\centering 图表待生成：#3}}}%
 }
 
-\title{ResNet-Transformer 混合网络在 CIFAR-100 图像分类任务中的探索与消融分析}
-\author{作者：\underline{~~~~~~~~~~~~}\\课程：机器学习与深度学习}
-\date{\today}
-
 \begin{document}
-\maketitle
 
-\begin{abstract}
-卷积神经网络具有局部感受野和平移等变等归纳偏置，通常能在中小规模图像数据集上稳定训练；视觉 Transformer 依靠自注意力机制建模长程依赖，但在小数据和中等参数预算下容易出现优化困难或过拟合。本文围绕 CIFAR-100 图像分类任务，实现轻量 CNN、轻量 ResNet-Transformer Hybrid、CIFAR 版 ResNet-18、强 Hybrid 和 Small ViT，并通过严格消融实验研究轻量 Hybrid 中 attention 机制、Transformer 层数和 patch size 的影响。实验重点不追求大型模型复现，而是在统一训练与评估协议下比较不同参数规模下 CNN 与 CNN-Transformer 混合结构的差异。
-\end{abstract}
+\twocolumn[
+\begin{@twocolumnfalse}
+\begin{center}
+{\bfseries\zihao{4} 轻量 CNN-Transformer 混合网络在 CIFAR-100 图像分类任务中的探索与消融分析\par}
+\vspace{0.8em}
+{\zihao{-4}\itshape 姓名，学号\par}
+\vspace{1.0em}
+\end{center}
+\end{@twocolumnfalse}
+]
 
-\noindent\textbf{关键词：} CIFAR-100；ResNet；视觉 Transformer；混合网络；消融实验
+\section*{摘要}
+本文围绕 CIFAR-100 图像分类任务，研究轻量卷积神经网络与视觉 Transformer 融合是否能在小参数预算下带来稳定收益。方法上，本文实现了适配 CIFAR 分辨率的轻量 ResNet baseline，并在较窄 ResNet 主干中插入 MobileViT-style 局部--全局--局部融合块，构成 CNN-Transformer Hybrid。实验分为主实验和消融实验：主实验比较纯 CNN、主 Hybrid 与容量重分配 Hybrid；消融实验进一步分析 self-attention、Transformer depth 和 patch size 的影响。结果显示，主 Hybrid 在参数量略少于 CNN baseline 的条件下将测试准确率从 71.82\% 提升到 72.69\%，容量重分配版本达到 72.88\%；no-attention 消融降至 70.98\%，说明 token-token 全局交互对性能有实际贡献。整体结论是：在 CIFAR-100 小图像任务中，CNN 的局部归纳偏置仍然强有效，而合理插入轻量 Transformer 模块可以获得稳定但幅度有限的提升。
+
+\noindent\textbf{关键词---} CIFAR-100；ResNet；视觉 Transformer；MobileViT；混合网络；消融实验
 
 \section{引言}
-CNN 通过卷积核共享和局部连接高效提取边缘、纹理和局部形状等视觉特征，是小图像分类任务中的强基线。ViT 将图像切分为 token 并使用多头自注意力建模 token 间关系，具备更灵活的全局依赖建模能力，但其缺少 CNN 的局部归纳偏置，通常需要更多数据、正则化和训练技巧。已有混合视觉网络并不是简单地在 CNN 后面追加 Transformer：MobileViT\cite{mehta2022mobilevit} 将 Transformer 作为卷积特征中的全局表示模块，形成局部--全局--局部的融合流程；CvT\cite{wu2021cvt} 将卷积引入 token embedding 和 Transformer 投影；CoAtNet\cite{dai2021coatnet} 则强调前期卷积与后期 attention 的有序组合；MoCoViT\cite{ma2022mocovit} 和 CMT\cite{guo2021cmt} 也从移动端和高效建模角度说明卷积与自注意力需要在结构中深度融合，而不是只在分类头前串接。
+CIFAR-100 图像大小为 $32\times32$，类别数为 100，每类样本数量有限。对这类小分辨率数据而言，卷积神经网络的局部感受野、权值共享和平移等变性具有明显优势；但纯卷积结构主要依靠堆叠局部算子扩大感受野，对远距离区域关系的显式建模能力有限。视觉 Transformer 通过 self-attention 在 token 序列上建模全局依赖，为图像分类提供了另一类表示学习方式，但在小数据集和小图像上直接使用 ViT 往往依赖更强的数据规模、正则化和训练技巧。
 
-本文选择 CIFAR-100\cite{krizhevsky2009learning} 作为主任务。该数据集图像分辨率仅为 $32\times32$，但包含 100 个类别，比 CIFAR-10 更能体现模型表示能力差异。本文设置两组参数预算接近的对比：轻量组比较约 2.8M 参数的 CNN 与 Hybrid，强组比较约 11M 参数的 ResNet-18 与 Hybrid，并加入 Small ViT 作为纯 Transformer 对照。实验回答两个问题：第一，Transformer 融合在轻量容量下是否比强 CNN 容量下更容易体现收益；第二，在轻量 Hybrid 中，attention 交互、Transformer 层数和 patch size 分别如何影响性能。
+围绕卷积神经网络与 ViT 结合这一课题，本文把研究对象限定为更具体的结构问题：在小图像、轻量参数预算和相同训练协议下，少量 Transformer 模块能否补充 CNN 的全局建模能力；这种收益主要来自 self-attention 本身，还是来自额外卷积、通道投影、前馈网络等附带容量。这个设定能够减少参数规模和训练策略差异对结论的干扰。
 
-\section{方法}
-\subsection{CNN baseline}
-CNN baseline 采用适配 CIFAR 分辨率的 ResNet-18。模型使用 $3\times3$ 卷积作为 stem，不使用 ImageNet 版 ResNet 的大步长 stem 和 max pooling，以保留 $32\times32$ 小图像的空间细节。本文使用 32 宽 ResNet 作为轻量 CNN baseline，使用 64 宽 ResNet-18 作为强 CNN baseline，从而观察不同容量下混合结构的相对收益。
+已有混合视觉网络表明，卷积与 attention 的结合通常比简单串联更有效。MobileViT~[1] 使用局部卷积、token 级全局建模和空间特征融合；CvT~[2] 将卷积引入 token 生成和投影；CoAtNet~[3] 则强调卷积与 attention 在不同阶段的互补关系。基于这些思路，本文选择课程设计规模内可复现的轻量设定：在约 2.8M 参数预算下比较 CIFAR ResNet 与 MobileViT-style ResNet-Hybrid，并通过结构消融分析性能来源。
 
-\subsection{Small ViT}
-Small ViT 参考 ViT\cite{dosovitskiy2021image} 的基本思想，将 $32\times32$ 图像划分为固定大小 patch，经卷积式 patch embedding 映射为 token 序列，加入 class token 和位置编码后输入 Transformer Encoder。该模型作为纯 Transformer 对照，用于观察在 CIFAR-100 这种小分辨率数据集上，缺少卷积前端时模型的优化和泛化表现。
+本文的主要工作如下：
 
-\subsection{ResNet-Transformer 混合模型}
-混合模型采用较窄的 CIFAR 版 ResNet 主干，以便在接近 CNN baseline 的参数预算下为 Transformer 融合块留出容量。模型在第二阶段输出的 $16\times16$ 特征和第三阶段输出的 $8\times8$ 特征上各插入一个 MobileViT 风格的局部--全局--局部融合块，主配置使用 $2\times2$ patch。具体而言，每个融合块先用局部卷积进一步提炼中层特征，再通过 unfold 操作将特征图组织为 patch token，输入 Transformer Encoder 建模跨 patch 的全局关系；随后通过 fold 操作将 token 无损还原为空间特征图，并通过卷积与原始 CNN 特征融合，最后继续送入后续 ResNet 阶段。相比 stride patch embedding，这种实现避免把 $2\times2$ 局部区域直接压缩为单个 token，更适合保留 CIFAR 小图像中的局部细节。轻量 Hybrid 与轻量 CNN 参数量接近，强 Hybrid 与 ResNet-18 参数量接近，因此可比较不同容量下融合结构的收益。
+1) 实现适配 CIFAR-100 的轻量 ResNet baseline 和 MobileViT-style ResNet-Hybrid；
 
-\section{实验设置}
-数据集使用 CIFAR-100，训练集 50,000 张、测试集 10,000 张。本文从训练集中固定划分 5,000 张作为验证集，用于选择最佳 checkpoint；官方测试集只在训练结束后评估一次。训练阶段采用随机裁剪、水平翻转、RandAugment 和标准化；验证和测试阶段仅进行标准化。优化器使用 AdamW，学习率采用 cosine 衰减，损失函数为带 label smoothing 的交叉熵。主实验训练轻量 CNN、轻量 Hybrid、ResNet-18、强 Hybrid 和 Small ViT，并统一报告准确率、参数量与训练曲线；严格消融实验均以轻量 Hybrid 为基准，每次只改变 attention 机制、Transformer 层数或 patch size 中的一个因素。
+2) 在相近参数预算下完成主实验，比较纯 CNN、主 Hybrid 和容量重分配 Hybrid；
 
-评价指标包括最终测试集 top-1 accuracy、可训练参数量、验证集 accuracy 曲线和单 epoch 耗时。所有实验固定随机种子，日志保存为 CSV，最佳模型依据验证集准确率保存。
+3) 围绕主 Hybrid 完成 no-attention、depth 和 patch size 消融，分析结构因素对性能的影响。
 
-\section{结果分析}
-\begin{figure}[H]
+\section{研究方法}
+\subsection{轻量 CNN baseline}
+CNN baseline 采用适配 CIFAR 分辨率的 ResNet。模型使用 $3\times3$ stem，不采用 ImageNet ResNet 中的大步长卷积和 max pooling，以避免在 $32\times32$ 输入上过早丢失空间细节。随后网络由四个 residual stage 组成，每个 stage 使用两个 BasicBlock，并在后续 stage 通过 stride 进行下采样。残差连接使较深网络在训练时更稳定，也提供了强有力的卷积基线。轻量配置将 base width 设为 32，并在分类头前加入 dropout，使参数量控制在约 2.8M。
+
+CNN baseline 用作 CIFAR-100 上合理、稳定且参数量接近的参考模型。本文把 baseline 和 Hybrid 都控制在约 2.8M 参数范围内，并使用完全相同的数据增强、优化器、训练轮数和验证集划分，使主实验集中比较结构差异。
+
+\subsection{MobileViT-style ResNet-Hybrid}
+Hybrid 使用较窄的 ResNet 主干，并在第二阶段输出的 $16\times16$ 特征和第三阶段输出的 $8\times8$ 特征上分别插入一个 MobileViT-style 融合块。其主要流程为
+\[
+\begin{aligned}
+&\mathrm{local\ conv}\rightarrow \mathrm{unfold}\rightarrow \mathrm{Transformer}\\
+&\rightarrow \mathrm{fold}\rightarrow \mathrm{fusion\ conv}.
+\end{aligned}
+\]
+其中 local conv 先提炼局部特征，unfold 将特征图组织为 patch token，Transformer Encoder 负责跨 patch 的全局关系建模，fold 再将 token 还原为空间特征图。最后通过 $1\times1$ 投影和 $3\times3$ fusion conv 与原 CNN 特征融合。相比 stride patch embedding，这种 unfold/fold 方式不会把 patch 内像素直接压缩成单个 token，更适合保留 CIFAR-100 小图像中的局部细节。
+
+具体而言，Hybrid 的主干宽度从 CNN baseline 的 32 降为 27，以便为 Transformer 融合块留出参数预算。第一个融合块作用在 $16\times16$ 特征上，此时特征仍保留较多空间细节，适合建模中等尺度区域之间的关系；第二个融合块作用在 $8\times8$ 特征上，此时语义更强，适合建模更抽象的跨区域依赖。Transformer depth 设为 2，num heads 设为 3，patch size 设为 2。这样的设计兼顾计算量和表达能力，避免在 CIFAR-100 上使用过深或过宽的 attention 模块导致过拟合或参数不公平。
+
+融合块在卷积特征中插入全局交互后再返回空间表示。局部纹理和边缘仍由卷积处理，保留 CNN 对小图像任务有效的归纳偏置；Transformer 负责补充 token 之间的关系建模，降低了直接使用纯 ViT 对数据规模和训练技巧的依赖。因此本文的 Hybrid 定位为卷积主干中的全局建模模块。
+
+\subsection{消融变量}
+消融实验统一从 \model{compact\_hybrid} 出发，每次只改变一个因素。no-attention 保留局部卷积、token 化、FFN、fold 和 fusion conv，同时移除 self-attention 的 token-token 交互；depth 实验将 Transformer depth 从 2 改为 1 或 3；patch size 实验将 patch size 从 2 改为 1 或 4。这样可以分别观察全局交互、Transformer 容量和 token 粒度对最终准确率的影响。
+
+no-attention 消融是本文中最重要的内部对照。该实验保留 qkv/projection 和 FFN 等参数容量，仅取消 token-token attention 交互，用于区分“额外参数和非线性变换”与“自注意力全局交互”两种因素。depth 消融用于观察全局建模深度是否不足或过量；patch size 消融则用于考察 token 粒度。对于 $32\times32$ 图像，patch 太大可能丢失局部结构，patch 太小则增加 token 数量和优化难度，二者都需要结合验证和测试结果判断。
+
+\section{实验与结果分析}
+\subsection{实验设置}
+数据集使用 CIFAR-100~[4]。训练集 50,000 张，测试集 10,000 张；从训练集中固定划分 5,000 张作为验证集，用于选择最佳 checkpoint，官方测试集只在训练结束后评估。训练阶段使用随机裁剪、水平翻转、RandAugment 和标准化；验证和测试阶段仅使用标准化。优化器采用 AdamW，初始学习率为 0.001，weight decay 为 0.05，学习率采用 cosine 衰减，最小学习率为 $10^{-6}$。损失函数使用带 label smoothing 的交叉熵，label smoothing 系数为 0.10。所有正式实验固定随机种子，并使用相同训练轮数、batch size、数据划分和增强策略。
+
+本文的调参原则是先固定训练协议，再比较结构变量。这样做牺牲了一部分针对单个模型的最优调参空间，但能减少实验结论受到训练策略差异的干扰。主实验中，\model{compact\_hybrid\_balanced} 调整了 Transformer embed dim 和 MLP ratio，使参数量更接近 CNN baseline；消融实验中，除被研究因素外，其余设置尽量继承 \model{compact\_hybrid}。因此表中同时报告参数量、最佳验证准确率、测试准确率和最佳轮次，用于判断结果是否来自模型结构、参数规模或训练波动。
+
+\subsection{主实验}
+主实验用于回答：在相近参数预算下，CNN-Transformer 混合结构是否比纯 CNN 更有优势。本文比较 \model{compact\_cnn}、\model{compact\_hybrid} 和 \model{compact\_hybrid\_balanced}，结果见表~\ref{tab:main} 和图~\ref{fig:main-acc}。
+
+\begin{table}[t]
 \centering
-\maybefig{accuracy_comparison.pdf}{0.88\linewidth}{accuracy\_comparison}
-\caption{不同模型在 CIFAR-100 上的最终测试准确率对比。}
-\label{fig:accuracy}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\maybefig{parameter_comparison.pdf}{0.88\linewidth}{parameter\_comparison}
-\caption{不同模型的可训练参数量对比。}
-\label{fig:params}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\maybefig{training_curves.pdf}{0.88\linewidth}{training\_curves}
-\caption{各模型验证准确率随训练轮次变化的曲线。}
-\label{fig:curves}
-\end{figure}
-
-若实验图已生成，表~\ref{tab:results} 会由绘图脚本自动导出的结果表填充；否则可在训练完成后重新编译报告。
-
-\begin{table}[H]
-\centering
-\caption{主实验与严格消融实验结果汇总。}
-\label{tab:results}
-\begin{tabular}{lccc}
+\footnotesize
+\caption{主实验结果。}
+\label{tab:main}
+\begin{tabular}{lrrrr}
 \toprule
-实验 & 参数量/M & 最终测试准确率/\% & 最佳验证轮次 \\
+模型 & 参数/M & Val/\% & Test/\% & Epoch \\
 \midrule
-\IfFileExists{../outputs/figures/results_table.tex}{\input{../outputs/figures/results_table.tex}}{Compact CNN & 待生成 & 待生成 & 待生成 \\
-Compact Hybrid & 待生成 & 待生成 & 待生成 \\
-ResNet-18 & 待生成 & 待生成 & 待生成 \\
-Strong Hybrid & 待生成 & 待生成 & 待生成 \\
-Small ViT & 待生成 & 待生成 & 待生成 \\}
+CNN & 2.821 & 71.50 & 71.82 & 160 \\
+Hybrid & 2.796 & 72.80 & 72.69 & 154 \\
+Hybrid-B & 2.818 & 72.50 & 72.88 & 142 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-从预期机制上看，强 ResNet-18 可能已经接近当前训练策略下的性能上限，因此 Hybrid 的提升可能较小；轻量 CNN 表达能力更有限，Transformer 的全局关系建模可能更容易体现补充作用。最终结论应结合图~\ref{fig:accuracy}、图~\ref{fig:params} 和表~\ref{tab:results} 中的实际数值给出。
-
-\section{严格消融实验}
-消融实验以轻量 Hybrid 为基准，每次只改变一个因素，其他设置保持不变。no-attention 实验保留局部卷积、patch embedding、位置编码、FFN、token 还原、卷积融合和分类头，只将 self-attention 替换为无 token-token 交互的前馈替代模块，用于判断 attention 交互本身是否有效。depth 实验只改变 Transformer Encoder 层数，用于判断增加或减少全局建模深度是否有帮助。patch size 实验只改变特征图切分粒度，用于判断 token 粒度对分类性能的影响。
-
-\begin{figure}[H]
+\begin{figure}[t]
 \centering
-\maybefig{accuracy_params_tradeoff.pdf}{0.74\linewidth}{accuracy\_params\_tradeoff}
-\caption{准确率与参数量的权衡关系。}
-\label{fig:tradeoff}
+\maybefig{main_accuracy.pdf}{0.96\linewidth}{main\_accuracy}
+\caption{主实验测试准确率可视化。}
+\label{fig:main-acc}
 \end{figure}
 
-\section{结论}
-本文完成了 CIFAR-100 上轻量 CNN、轻量双阶段 Hybrid、ResNet-18、强双阶段 Hybrid 和 Small ViT 的实现与对比。若轻量 Hybrid 相比轻量 CNN 的提升更明显，而强 Hybrid 相比 ResNet-18 只小幅提升，则说明 Transformer 融合块在容量受限场景下更有价值；若两组提升都有限，则应承认在 CIFAR-100 和当前训练策略下，卷积归纳偏置仍然更划算。后续可进一步尝试更强的数据增强、知识蒸馏或更完整的 MobileViT/CMT 家族结构。
+与 \model{compact\_cnn} 相比，\model{compact\_hybrid} 参数量略少，validation accuracy 从 71.50\% 提升到 72.80\%，test accuracy 从 71.82\% 提升到 72.69\%。这表明在轻量参数预算下，将部分卷积容量分配给基于 Transformer 的全局建模模块能够带来稳定小幅收益。\model{compact\_hybrid\_balanced} 的 test accuracy 达到 72.88\%，记录了容量重分配配置在同一训练协议下的表现。
 
-\bibliographystyle{plain}
-\bibliography{references}
+从图~\ref{fig:main-curves} 可以看到，三种模型在训练前期都快速提升，说明当前训练协议对 CNN 和 Hybrid 都能够正常优化。进入中后期后，Hybrid 曲线整体略高于 CNN，差距在较长训练过程中逐渐形成。该趋势表明 Hybrid 的收益来自表示能力上的持续补充。另一方面，CNN 的曲线仍然非常接近 Hybrid，说明 CIFAR-100 小图像任务中卷积结构仍具有很强竞争力。结合最终测试准确率和训练曲线，Hybrid 在相同训练协议下取得了稳定但有限的优势。
+
+\model{compact\_hybrid\_balanced} 的测试准确率最高，但验证准确率略低于主 Hybrid。由于本文没有进行多 seed 重复实验，Hybrid-B 主要用于呈现另一种参数分配方式在固定训练协议下的结果；主消融仍以 \model{compact\_hybrid} 为基准，以保持结构变量一致。
+
+\begin{figure}[t]
+\centering
+\maybefig{main_training_curves.pdf}{0.96\linewidth}{main\_training\_curves}
+\caption{主实验验证准确率曲线。}
+\label{fig:main-curves}
+\end{figure}
+
+\subsection{消融实验}
+消融实验用于回答：Hybrid 的提升来自哪些结构因素。结果见表~\ref{tab:ablation} 和图~\ref{fig:ablation-acc}。
+
+\begin{table}[t]
+\centering
+\footnotesize
+\caption{Hybrid 内部消融结果。}
+\label{tab:ablation}
+\begin{tabular}{lrrrr}
+\toprule
+实验 & 参数/M & Val/\% & Test/\% & Epoch \\
+\midrule
+Hybrid & 2.796 & 72.80 & 72.69 & 154 \\
+NoAttn & 2.796 & 72.34 & 70.98 & 140 \\
+Depth1 & 2.619 & 72.28 & 72.64 & 153 \\
+Depth3 & 2.973 & 74.08 & 73.04 & 147 \\
+Patch1 & 2.812 & 73.46 & 72.77 & 157 \\
+Patch4 & 2.792 & 72.94 & 72.39 & 143 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\maybefig{ablation_accuracy.pdf}{0.96\linewidth}{ablation\_accuracy}
+\caption{消融实验测试准确率可视化。}
+\label{fig:ablation-acc}
+\end{figure}
+
+no-attention 与主 Hybrid 参数量相同，但 test accuracy 从 72.69\% 降至 70.98\%。该结果表明性能提升不只是来自局部卷积、通道投影或特征融合结构，self-attention 的 token-token 交互对结果有贡献。depth1 与主 Hybrid 接近，depth3 获得更高 validation 和 test accuracy，同时参数量增加到 2.973M，反映更深全局建模模块的潜在收益。patch1 略高于主配置，patch4 略低，表明在 CIFAR-100 小图像上过粗 patch 可能损失局部细节。
+
+no-attention 的下降幅度最大，这一结果是本文最直接的结构证据。由于 no-attention 保留了局部卷积、token 化、FFN 和融合卷积，其参数量与主 Hybrid 相同，因此 1.71 个百分点的测试下降不能简单归因于参数减少。更合理的解释是：虽然 CIFAR-100 图像很小，但类别数较多，同一类别内部存在较大外观变化，模型仍然需要在不同空间区域之间建立关系。self-attention 提供的 token-token 交互能够补充卷积局部感受野的不足。
+
+depth 消融显示，depth1 与主 Hybrid 的测试准确率几乎相同，而 depth3 进一步提升到 73.04\%。主配置的 depth=2 已能取得稳定收益，增加 Transformer 深度可能带来更强表达能力。但 depth3 的参数量也增加到 2.973M，已经明显高于 CNN baseline 和主 Hybrid，因此该结果归入内部消融分析。patch 消融则显示 patch1 略优于 patch2，patch4 略差。该结果符合小图像任务中保留细粒度空间信息的重要性：过大的 patch 会把局部区域合并得过粗，可能损失纹理和部件信息；过小的 patch 虽然保留细节，但也会增加 token 数量和优化复杂度。本文结果表明，在当前训练设置下，patch1 和 patch2 都是合理选择，而 patch4 不如前两者稳定。
+
+\begin{figure}[t]
+\centering
+\maybefig{ablation_training_curves.pdf}{0.96\linewidth}{ablation\_training\_curves}
+\caption{消融实验验证准确率曲线。}
+\label{fig:ablation-curves}
+\end{figure}
+
+\subsection{批判性分析}
+从结果看，Hybrid 相比 CNN 的收益存在明确边界。首先，主 Hybrid 的测试提升为 0.87 个百分点，属于轻量模型上的稳定小幅收益；其次，depth3 虽然表现更好，但参数量也明显增加；再次，所有正式结果基于固定随机种子，尚未报告多 seed 均值和方差，因此结论限定在当前实验协议下。CIFAR-100 图像分辨率很低，CNN 的局部归纳偏置本身非常匹配任务，Transformer 模块的优势主要体现在补充全局关系。
+
+本文还有两个局限。第一，实验没有系统搜索学习率、weight decay、dropout、RandAugment 强度等超参数。统一训练协议提高了比较公平性，但不保证每个模型都达到最优。第二，本文只在 CIFAR-100 上验证，输入分辨率较低，结论不一定能直接推广到 ImageNet 或更高分辨率场景。若数据规模和分辨率增大，Transformer 的全局建模能力可能更有价值；反之，在更小数据或更低计算预算下，纯 CNN 可能仍然更划算。因此，本文结论适用于当前轻量 CIFAR-100 实验设定。
+
+从实验设计角度看，本文的价值主要在于完整实现、参数对齐和消融分析。主实验回答“混合结构是否有收益”，no-attention 回答“收益是否来自 self-attention 交互”，depth 和 patch size 回答“结构超参数如何影响结果”。这些实验共同形成了较完整的证据链，比单独报告一个最高准确率更可靠。
+
+\section{结论}
+本文在 CIFAR-100 上实现并比较了轻量 CNN 与 MobileViT-style ResNet-Transformer Hybrid。实验结果支持一个谨慎结论：在约 2.8M 参数预算下，Hybrid 在参数量略少的情况下相比 CNN baseline 获得稳定小幅提升；no-attention 消融进一步表明 self-attention 的全局交互是性能来源之一。与此同时，提升幅度并不大，说明 CIFAR-100 小图像任务中 CNN 的局部归纳偏置仍然非常有效，Hybrid 的收益依赖融合位置、容量分配和 patch 粒度。
+
+综合主实验和消融实验，CNN-Transformer 混合结构在轻量图像分类中的作用主要是补充卷积主干的全局关系建模能力。卷积负责稳定提取局部纹理和空间结构，Transformer 则在中后层特征上提供跨区域关系建模。未来工作可以进一步补充多随机种子实验、报告置信区间，并在更大分辨率或更复杂数据集上检验该混合结构的泛化性。同时，也可以继续探索更细致的容量分配方式，例如不同 stage 插入位置、不同 attention head 数量、轻量化 FFN 设计以及蒸馏训练等，以判断 Hybrid 的收益是否能够在相同计算预算下进一步放大。
+
+\section{参考文献}
+\noindent [1] S. Mehta and M. Rastegari, ``MobileViT: Light-weight, General-purpose, and Mobile-friendly Vision Transformer,'' International Conference on Learning Representations, 2022.
+
+\noindent [2] H. Wu, B. Xiao, N. Codella, et al., ``CvT: Introducing Convolutions to Vision Transformers,'' International Conference on Computer Vision, 2021.
+
+\noindent [3] Z. Dai, H. Liu, Q. V. Le, and M. Tan, ``CoAtNet: Marrying Convolution and Attention for All Data Sizes,'' Advances in Neural Information Processing Systems, 2021.
+
+\noindent [4] A. Krizhevsky, ``Learning Multiple Layers of Features from Tiny Images,'' University of Toronto, 2009.
 
 \end{document}

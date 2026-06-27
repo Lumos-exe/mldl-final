@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_ROOT"
+
 if [[ -z "${PYTHON:-}" ]]; then
   if command -v python >/dev/null 2>&1; then
     PYTHON=python
@@ -14,6 +18,4 @@ fi
 
 "$PYTHON" src/train.py --config configs/compact_cnn.json --device cuda "$@"
 "$PYTHON" src/train.py --config configs/compact_hybrid.json --device cuda "$@"
-"$PYTHON" src/train.py --config configs/cnn_baseline.json --device cuda "$@"
-"$PYTHON" src/train.py --config configs/tiny_vit.json --device cuda "$@"
-"$PYTHON" src/train.py --config configs/hybrid_main.json --device cuda "$@"
+"$PYTHON" src/train.py --config configs/compact_hybrid_balanced.json --device cuda "$@"
